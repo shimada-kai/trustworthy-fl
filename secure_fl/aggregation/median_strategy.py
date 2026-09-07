@@ -2,7 +2,7 @@ from collections.abc import Iterable
 
 from flwr.app import ArrayRecord, MetricRecord, Message
 from flwr.serverapp.strategy import FedAvg
-
+from secure_fl.tee.client import aggregate_via_tee_api
 
 class CoordinateWiseMedian(FedAvg):
     """Coordinate-wise median aggregation strategy."""
@@ -33,14 +33,7 @@ class CoordinateWiseMedian(FedAvg):
             for msg in valid_replies
         ]
 
-        # 先ほどテストした純粋なMedian関数を使用
-        from secure_fl.aggregation.median import (
-            coordinate_wise_median_state_dict,
-        )
-
-        median_state = coordinate_wise_median_state_dict(
-            client_states
-        )
+        median_state = aggregate_via_tee_api(client_states)
 
         aggregated_arrays = ArrayRecord(
             median_state
