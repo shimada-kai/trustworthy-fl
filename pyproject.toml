@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "secure-fl-starter"
+version = "0.1.0"
+description = "Flower + PyTorch federated learning baseline on the UCI Adult dataset"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "flwr[simulation]>=1.30,<2.0",
+    "torch>=2.3",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "matplotlib>=3.9",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["secure_fl"]
+
+[tool.flwr.app]
+publisher = "secure-fl"
+
+[tool.flwr.app.components]
+serverapp = "secure_fl.fl.server_app:app"
+clientapp = "secure_fl.fl.client_app:app"
+
+[tool.flwr.app.config]
+
+num-server-rounds = 5
+local-epochs = 1
+batch-size = 256
+learning-rate = 0.001
+seed = 42
+
+# =============================
+# Model Poisoning設定
+# =============================
+
+# falseなら通常FedAvg
+# trueなら攻撃を有効化
+attack-enabled = false
+
+# 使用する攻撃手法
+attack-type = "sign_flip"
+
+# 7クライアントのうち、
+# Client 0, 1, 2を攻撃者にする
+malicious-client-ids = "0,1,2"
+
+# 1.0:
+# Δw → -Δw
+#
+# 5.0:
+# Δw → -5Δw
+attack-scale = 1.0
