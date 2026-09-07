@@ -4,6 +4,7 @@ import torch
 from flwr.app import ArrayRecord, ConfigRecord, Context
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedAvg
+from secure_fl.aggregation.median_strategy import CoordinateWiseMedian
 
 from secure_fl.dataset.adult import get_input_dim, load_global_test_data
 from secure_fl.evaluation.results import save_result
@@ -116,6 +117,9 @@ def main(grid: Grid, context: Context) -> None:
     num_rounds = int(context.run_config["num-server-rounds"])
     lr = float(context.run_config["learning-rate"])
     seed = int(context.run_config["seed"])
+    aggregation_type = str(
+        context.run_config["aggregation-type"]
+    )
     # ==========================================
     # 攻撃設定
     # ==========================================
@@ -139,12 +143,26 @@ def main(grid: Grid, context: Context) -> None:
     # ==========================================
     # 攻撃あり/なしで実験名を分ける
     # ==========================================
-    if attack_enabled:
-        experiment_name = "fedavg_poisoning"
-        experiment_label = "FedAvg + Sign Flip (3/7)"
+    if aggregation_type == "median":
+        if attack_enabled:
+            experiment_name = "median_poisoning"
+            experiment_label = "Median + Sign Flip (3/7)"
+        else:
+            experiment_name = "median"
+            experiment_label = "Median"
+
+    elif aggregation_type == "fedavg":
+        if attack_enabled:
+            experiment_name = "fedavg_poisoning"
+            experiment_label = "FedAvg + Sign Flip (3/7)"
+        else:
+            experiment_name = "fedavg"
+            experiment_label = "FedAvg"
+
     else:
-        experiment_name = "fedavg"
-        experiment_label = "FedAvg"
+        raise ValueError(
+            f"Unknown aggregation type: {aggregation_type}"
+        )
     # ==========================================
     # 実験条件をログ表示
     # ==========================================
@@ -159,13 +177,26 @@ def main(grid: Grid, context: Context) -> None:
     model = AdultMLP(get_input_dim(seed))
     initial_arrays = ArrayRecord(model.state_dict())
 
-    strategy = FedAvg(
-        fraction_train=1.0,
-        fraction_evaluate=1.0,
-        min_train_nodes=7,
-        min_evaluate_nodes=7,
-        min_available_nodes=7,
-    )
+    strategy_kwargs = {
+        "fraction_train": 1.0,
+        "fraction_evaluate": 1.0,
+        "min_train_nodes": 7,
+        "min_evaluate_nodes": 7,
+        "min_available_nodes": 7,
+    }
+
+    if aggregation_type == "median":
+        strategy = CoordinateWiseMedian(
+            **strategy_kwargs
+        )
+    elif aggregation_type == "fedavg":
+        strategy = FedAvg(
+            **strategy_kwargs
+        )
+    else:
+        raise ValueError(
+            f"Unknown aggregation type: {aggregation_type}"
+        )
 
     result = strategy.start(
         grid=grid,
