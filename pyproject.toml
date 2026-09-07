@@ -35,12 +35,19 @@ learning-rate = 0.001
 seed = 42
 
 # =============================
+# Aggregation設定
+# =============================
+
+# "fedavg" または "median"
+aggregation-type = "median"
+
+# =============================
 # Model Poisoning設定
 # =============================
 
 # falseなら通常FedAvg
 # trueなら攻撃を有効化
-attack-enabled = false
+attack-enabled = true
 
 # 使用する攻撃手法
 attack-type = "sign_flip"
