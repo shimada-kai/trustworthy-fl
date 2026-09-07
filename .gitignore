@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 artifacts/
 .DS_Store
+
+# TDX / attestation artifacts
+certs/
+*.key
+quote.bin
+server.crt
+tdx_quote.bin
+host_registry.json
