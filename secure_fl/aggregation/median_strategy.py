@@ -2,10 +2,17 @@ from collections.abc import Iterable
 
 from flwr.app import ArrayRecord, MetricRecord, Message
 from flwr.serverapp.strategy import FedAvg
-from secure_fl.tee.client import aggregate_via_tee_api
+
+from secure_fl.aggregation.median import coordinate_wise_median_state_dict
+from secure_fl.tee.client import get_aggregated_update_via_tee_api
+
 
 class CoordinateWiseMedian(FedAvg):
     """Coordinate-wise median aggregation strategy."""
+
+    def __init__(self, *args, tee_enabled: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tee_enabled = tee_enabled
 
     def aggregate_train(
         self,
@@ -13,33 +20,54 @@ class CoordinateWiseMedian(FedAvg):
         replies: Iterable[Message],
     ) -> tuple[ArrayRecord | None, MetricRecord | None]:
 
-        # Flower標準のvalidation処理を利用
         valid_replies, _ = self._check_and_log_replies(
             replies,
             is_train=True,
+            validate=not self.tee_enabled,
         )
 
         if not valid_replies:
             return None, None
 
-        # ClientAppから返されたArrayRecordのkeyを取得
-        record_key = list(
-            valid_replies[0].content.array_records.keys()
-        )[0]
+        # ==========================================
+        # TDX Median
+        # ==========================================
+        if self.tee_enabled:
+            median_state, accepted_clients = (
+                get_aggregated_update_via_tee_api(
+                    round_id=server_round,
+                )
+            )
 
-        # 各clientのモデルをtorch state_dictへ変換
-        client_states = [
-            msg.content[record_key].to_torch_state_dict()
-            for msg in valid_replies
-        ]
+            print(
+                f"[TDX-MEDIAN][round={server_round}] "
+                f"aggregated {accepted_clients} accepted updates"
+            )
 
-        median_state = aggregate_via_tee_api(client_states)
+        # ==========================================
+        # Plain Median
+        # ==========================================
+        else:
+            record_key = list(
+                valid_replies[0].content.array_records.keys()
+            )[0]
 
-        aggregated_arrays = ArrayRecord(
-            median_state
-        )
+            client_states = [
+                msg.content[record_key].to_torch_state_dict()
+                for msg in valid_replies
+            ]
 
-        # training metricsはFedAvgと同じ方法で集約
+            median_state = coordinate_wise_median_state_dict(
+                client_states
+            )
+
+            print(
+                f"[PLAIN-MEDIAN][round={server_round}] "
+                f"aggregated {len(client_states)} client models"
+            )
+
+        aggregated_arrays = ArrayRecord(median_state)
+
         reply_contents = [
             msg.content
             for msg in valid_replies
@@ -48,11 +76,6 @@ class CoordinateWiseMedian(FedAvg):
         metrics = self.train_metrics_aggr_fn(
             reply_contents,
             self.weighted_by_key,
-        )
-
-        print(
-            f"[MEDIAN][round={server_round}] "
-            f"aggregated {len(valid_replies)} client models"
         )
 
         return aggregated_arrays, metrics

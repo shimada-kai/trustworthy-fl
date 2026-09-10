@@ -120,6 +120,9 @@ def main(grid: Grid, context: Context) -> None:
     aggregation_type = str(
         context.run_config["aggregation-type"]
     )
+    tee_enabled = bool(
+        context.run_config["tee-enabled"]
+    )
     # ==========================================
     # 攻撃設定
     # ==========================================
@@ -144,12 +147,20 @@ def main(grid: Grid, context: Context) -> None:
     # 攻撃あり/なしで実験名を分ける
     # ==========================================
     if aggregation_type == "median":
-        if attack_enabled:
-            experiment_name = "median_poisoning"
-            experiment_label = "Median + Sign Flip (3/7)"
+        if tee_enabled:
+            if attack_enabled:
+                experiment_name = "tdx_median_poisoning"
+                experiment_label = "TDX Median + Sign Flip (3/7)"
+            else:
+                experiment_name = "tdx_median"
+                experiment_label = "TDX Median"
         else:
-            experiment_name = "median"
-            experiment_label = "Median"
+            if attack_enabled:
+                experiment_name = "median_poisoning"
+                experiment_label = "Median + Sign Flip (3/7)"
+            else:
+                experiment_name = "median"
+                experiment_label = "Median"
 
     elif aggregation_type == "fedavg":
         if attack_enabled:
@@ -168,6 +179,8 @@ def main(grid: Grid, context: Context) -> None:
     # ==========================================
     print(
         f"[CONFIG] "
+        f"aggregation_type={aggregation_type} "
+        f"tee_enabled={tee_enabled} "
         f"attack_enabled={attack_enabled} "
         f"attack_type={attack_type} "
         f"malicious_clients={malicious_client_ids} "
@@ -187,7 +200,8 @@ def main(grid: Grid, context: Context) -> None:
 
     if aggregation_type == "median":
         strategy = CoordinateWiseMedian(
-            **strategy_kwargs
+            **strategy_kwargs,
+            tee_enabled=tee_enabled,
         )
     elif aggregation_type == "fedavg":
         strategy = FedAvg(

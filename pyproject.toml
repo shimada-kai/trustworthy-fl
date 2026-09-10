@@ -33,6 +33,7 @@ local-epochs = 1
 batch-size = 256
 learning-rate = 0.001
 seed = 42
+tee-enabled = false
 
 # =============================
 # Aggregation設定

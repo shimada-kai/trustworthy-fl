@@ -1,7 +1,10 @@
 import pytest
 import torch
 
-from secure_fl.tee.client import aggregate_via_tee_api
+from secure_fl.tee.client import (
+    aggregate_via_tee_api,
+    submit_update_via_tee_api,
+)
 
 
 def _client_states():
@@ -121,3 +124,165 @@ def test_attestation_rejects_tls_key_hash_mismatch(monkeypatch):
             instance="dummy-instance",
             verifier_bin="dummy-verifier",
         )
+
+def test_attestation_runs_tdx_check_after_provenance(monkeypatch, tmp_path):
+    import base64
+    import subprocess
+
+    from secure_fl.tee.client import _verify_remote_attestation
+
+    expected_hash = bytes.fromhex("11" * 32)
+    calls = []
+
+    class AttestResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "quote": base64.b64encode(b"dummy-quote").decode(),
+                "tls_key_hash": expected_hash.hex(),
+            }
+
+    monkeypatch.setattr(
+        "secure_fl.tee.client.requests.post",
+        lambda *args, **kwargs: AttestResponse(),
+    )
+    monkeypatch.setattr(
+        "secure_fl.tee.client._tls_spki_hash",
+        lambda *args, **kwargs: expected_hash,
+    )
+
+    def mock_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "secure_fl.tee.client.subprocess.run",
+        mock_run,
+    )
+
+    _verify_remote_attestation(
+        api_url="https://localhost:8000",
+        ca_cert="./server.crt",
+        instance="dummy-instance",
+        verifier_bin="/fake/gceprovenance",
+        tdx_check_bin="/fake/tdx-check",
+    )
+
+    assert len(calls) == 2
+    assert calls[0][0] == "/fake/gceprovenance"
+    assert calls[0][1] == "verify"
+
+    assert calls[1][0] == "/fake/tdx-check"
+    assert "-get_collateral" in calls[1]
+    assert "-check_crl" in calls[1]
+    assert "-report_data" in calls[1]
+
+
+def test_attestation_rejects_tdx_check_failure(monkeypatch):
+    import base64
+    import subprocess
+
+    from secure_fl.tee.client import _verify_remote_attestation
+
+    expected_hash = bytes.fromhex("11" * 32)
+
+    class AttestResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "quote": base64.b64encode(b"dummy-quote").decode(),
+                "tls_key_hash": expected_hash.hex(),
+            }
+
+    monkeypatch.setattr(
+        "secure_fl.tee.client.requests.post",
+        lambda *args, **kwargs: AttestResponse(),
+    )
+    monkeypatch.setattr(
+        "secure_fl.tee.client._tls_spki_hash",
+        lambda *args, **kwargs: expected_hash,
+    )
+
+    call_count = 0
+
+    def mock_run(command, **kwargs):
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            return subprocess.CompletedProcess(
+                command,
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+
+        return subprocess.CompletedProcess(
+            command,
+            returncode=1,
+            stdout="",
+            stderr="TCB verification failed",
+        )
+
+    monkeypatch.setattr(
+        "secure_fl.tee.client.subprocess.run",
+        mock_run,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="TDX TCB/CRL verification failed",
+    ):
+        _verify_remote_attestation(
+            api_url="https://localhost:8000",
+            ca_cert="./server.crt",
+            instance="dummy-instance",
+            verifier_bin="/fake/gceprovenance",
+            tdx_check_bin="/fake/tdx-check",
+        )
+
+
+def test_submit_update_is_not_called_when_attestation_fails(monkeypatch):
+    submit_called = False
+
+    def mock_verify(*args, **kwargs):
+        raise RuntimeError("Remote attestation failed")
+
+    def mock_post(*args, **kwargs):
+        nonlocal submit_called
+        submit_called = True
+        raise AssertionError(
+            "/submit_update must not be called"
+        )
+
+    monkeypatch.setattr(
+        "secure_fl.tee.client._verify_remote_attestation",
+        mock_verify,
+    )
+    monkeypatch.setattr(
+        "secure_fl.tee.client.requests.post",
+        mock_post,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Remote attestation failed",
+    ):
+        submit_update_via_tee_api(
+            round_id=1,
+            client_id="0",
+            state={
+                "weight": torch.tensor([1.0, 2.0]),
+            },
+        )
+
+    assert submit_called is False

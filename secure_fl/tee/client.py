@@ -50,6 +50,7 @@ def _verify_remote_attestation(
     ca_cert: str,
     instance: str,
     verifier_bin: str,
+    tdx_check_bin: str = "~/bin/tdx-check",
 ) -> None:
     """Verify that the TLS endpoint is backed by the expected TDX VM."""
 
@@ -69,8 +70,7 @@ def _verify_remote_attestation(
     quote = base64.b64decode(evidence["quote"], validate=True)
     server_tls_hash = bytes.fromhex(evidence["tls_key_hash"])
 
-    # Never trust the TLS hash returned by the server alone.
-    # Compute it independently from the certificate pinned by this client.
+    # Compute the TLS key hash independently from the pinned certificate.
     expected_tls_hash = _tls_spki_hash(ca_cert)
 
     if server_tls_hash != expected_tls_hash:
@@ -78,13 +78,15 @@ def _verify_remote_attestation(
             "Remote attestation failed: TLS public-key hash mismatch"
         )
 
+    # REPORT_DATA = fresh nonce || TLS public-key hash
     report_data = nonce + expected_tls_hash
 
     with tempfile.TemporaryDirectory() as temp_dir:
         quote_path = Path(temp_dir) / "quote.bin"
         quote_path.write_bytes(quote)
 
-        result = subprocess.run(
+        # 1. Verify GCE provenance and expected VM identity.
+        provenance_result = subprocess.run(
             [
                 os.path.expanduser(verifier_bin),
                 "verify",
@@ -98,14 +100,45 @@ def _verify_remote_attestation(
             text=True,
             capture_output=True,
             timeout=60,
+            cwd=temp_dir,
         )
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            "Remote attestation failed:\n"
-            f"{result.stdout}\n{result.stderr}"
+        if provenance_result.returncode != 0:
+            raise RuntimeError(
+                "GCE provenance verification failed:\n"
+                f"{provenance_result.stdout}\n"
+                f"{provenance_result.stderr}"
+            )
+
+        # 2. Verify TDX TCB status, Intel collateral, CRL,
+        #    and REPORT_DATA binding.
+        tdx_check_result = subprocess.run(
+            [
+                os.path.expanduser(tdx_check_bin),
+                "-in",
+                str(quote_path),
+                "-inform",
+                "bin",
+                "-report_data",
+                report_data.hex(),
+                "-get_collateral",
+                "true",
+                "-check_crl",
+                "true",
+                "-quiet",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=180,
+            cwd=temp_dir,
         )
 
+        if tdx_check_result.returncode != 0:
+            raise RuntimeError(
+                "TDX TCB/CRL verification failed:\n"
+                f"{tdx_check_result.stdout}\n"
+                f"{tdx_check_result.stderr}"
+            )
 
 def aggregate_via_tee_api(
     client_states: Sequence[Mapping[str, torch.Tensor]],
@@ -149,3 +182,66 @@ def aggregate_via_tee_api(
         name: torch.tensor(value)
         for name, value in aggregated_state.items()
     }
+
+def submit_update_via_tee_api(
+    round_id: int,
+    client_id: str,
+    state: Mapping[str, torch.Tensor],
+    api_url: str = "https://34.146.228.189:8000",
+    ca_cert: str = "certs/server.crt",
+    instance: str = DEFAULT_INSTANCE,
+    verifier_bin: str = "~/bin/gceprovenance",
+) -> dict[str, Any]:
+    """Attest the TDX VM, then send one client update directly to it."""
+
+    # Security gate:
+    # no individual model update is sent before attestation succeeds.
+    _verify_remote_attestation(
+        api_url=api_url,
+        ca_cert=ca_cert,
+        instance=instance,
+        verifier_bin=verifier_bin,
+    )
+
+    payload = {
+        "round_id": round_id,
+        "client_id": client_id,
+        "state": {
+            name: tensor.detach().cpu().tolist()
+            for name, tensor in state.items()
+        },
+    }
+
+    response = requests.post(
+        f"{api_url}/submit_update",
+        json=payload,
+        verify=ca_cert,
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+def get_aggregated_update_via_tee_api(
+    round_id: int,
+    api_url: str = "https://34.146.228.189:8000",
+    ca_cert: str = "certs/server.crt",
+) -> tuple[dict[str, torch.Tensor], int]:
+    """Fetch only the aggregated model for one round from the TDX VM."""
+
+    response = requests.post(
+        f"{api_url}/aggregate_round",
+        json={"round_id": round_id},
+        verify=ca_cert,
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    result = response.json()
+
+    aggregated_state = {
+        name: torch.tensor(value)
+        for name, value in result["aggregated_state"].items()
+    }
+
+    return aggregated_state, int(result["accepted_clients"])
