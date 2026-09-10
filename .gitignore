@@ -11,3 +11,18 @@ quote.bin
 server.crt
 tdx_quote.bin
 host_registry.json
+
+# RISC Zero / Rust build artifacts
+zkvm/target/
+zkvm/traces/
+zkvm/adam_trace.json
+
+# Local backup files
+*.before_zk
+*.before_zk_trace
+*.before_adam_trace
+*.bak_zkvm
+
+# External ZK experiments
+kaizen_external/
+zkdl_external/
