@@ -140,6 +140,9 @@ def _verify_remote_attestation(
                 f"{tdx_check_result.stderr}"
             )
 
+    print("[REMOTE-ATTESTATION] result=VERIFIED")
+    print("[TLS-BINDING] result=VERIFIED")
+
 def aggregate_via_tee_api(
     client_states: Sequence[Mapping[str, torch.Tensor]],
     api_url: str = "https://localhost:8000",
@@ -219,6 +222,13 @@ def submit_update_via_tee_api(
         timeout=60,
     )
     response.raise_for_status()
+
+    print(
+        f"[TLS-SUBMIT] "
+        f"round={round_id} "
+        f"client={client_id} "
+        f"result=SUCCESS"
+    )
 
     return response.json()
 
