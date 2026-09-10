@@ -6,6 +6,7 @@ from secure_fl.dataset.adult import get_input_dim, load_client_data
 from secure_fl.model.mlp import AdultMLP
 from secure_fl.model.train import evaluate_model, train_model
 from secure_fl.attack.sign_flip import sign_flip_state_dict
+from secure_fl.attack.adaptive_median import adaptive_median_state_dict
 from secure_fl.tee.client import submit_update_via_tee_api
 
 app = ClientApp()
@@ -91,6 +92,10 @@ def train(msg: Message, context: Context):
         context.run_config["attack-scale"]
     )
 
+    attack_start_round = int(
+        context.run_config["attack-start-round"]
+    )
+
     malicious_client_ids = parse_malicious_client_ids(
         str(
             context.run_config[
@@ -138,6 +143,21 @@ def train(msg: Message, context: Context):
         )
     }
 
+    server_round = int(
+        msg.content["config"]["server-round"]
+    )
+
+    # ==========================================
+    # Previous Global Model
+    # ==========================================
+    previous_global_state = None
+
+    if "previous-global" in context.state.array_records:
+        previous_global_state = (
+            context.state["previous-global"]
+            .to_torch_state_dict()
+        )
+
     model.load_state_dict(
         global_state
     )
@@ -183,6 +203,36 @@ def train(msg: Message, context: Context):
                 f"scale={attack_scale}"
             )
 
+        elif attack_type == "adaptive_median":
+
+            if (
+                server_round >= attack_start_round
+                and previous_global_state is not None
+            ):
+
+                local_state = adaptive_median_state_dict(
+                    local_state=local_state,
+                    global_state=global_state,
+                    previous_global_state=previous_global_state,
+                    scale=attack_scale,
+                )
+
+                print(
+                    f"[ATTACK] "
+                    f"client={partition_id} "
+                    f"type=adaptive_median "
+                    f"round={server_round} "
+                    f"scale={attack_scale}"
+                )
+
+            else:
+                print(
+                    f"[ATTACK-WARMUP] "
+                    f"client={partition_id} "
+                    f"type=adaptive_median "
+                    f"round={server_round}"
+                )
+
         else:
             raise ValueError(
                 f"Unsupported attack type: "
@@ -192,11 +242,11 @@ def train(msg: Message, context: Context):
     # ==========================================
     # Direct Client -> TDX submission
     # ==========================================
+    context.state["previous-global"] = ArrayRecord(
+        global_state
+    )
+    
     if aggregation_type == "median" and tee_enabled:
-        server_round = int(
-            msg.content["config"]["server-round"]
-        )
-
         submit_result = submit_update_via_tee_api(
             round_id=server_round,
             client_id=str(partition_id),

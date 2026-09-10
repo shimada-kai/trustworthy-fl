@@ -89,9 +89,26 @@ def get_input_dim(seed: int = 42) -> int:
     return int(X_train.shape[1])
 
 
-def _to_loader(X, y, batch_size: int, shuffle: bool) -> DataLoader:
+def _to_loader(
+    X,
+    y,
+    batch_size: int,
+    shuffle: bool,
+    seed: int | None = None,
+) -> DataLoader:
     dataset = TensorDataset(torch.from_numpy(X), torch.from_numpy(y))
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+    generator = None
+    if shuffle and seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        generator=generator,
+    )
 
 
 def _client_indices(
@@ -129,7 +146,11 @@ def load_client_data(
     train_idx, val_idx = _client_indices(partition_id, num_partitions, seed)
 
     trainloader = _to_loader(
-        X_train[train_idx], y_train[train_idx], batch_size=batch_size, shuffle=True
+        X_train[train_idx],
+        y_train[train_idx],
+        batch_size=batch_size,
+        shuffle=True,
+        seed=seed + partition_id,
     )
     valloader = _to_loader(
         X_train[val_idx], y_train[val_idx], batch_size=batch_size, shuffle=False

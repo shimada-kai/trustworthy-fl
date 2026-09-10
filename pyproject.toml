@@ -48,7 +48,7 @@ aggregation-type = "median"
 
 # falseなら通常FedAvg
 # trueなら攻撃を有効化
-attack-enabled = true
+attack-enabled = false
 
 # 使用する攻撃手法
 attack-type = "sign_flip"
@@ -63,3 +63,6 @@ malicious-client-ids = "0,1,2"
 # 5.0:
 # Δw → -5Δw
 attack-scale = 1.0
+
+# Adaptive Median Attackを開始するround
+attack-start-round = 3
