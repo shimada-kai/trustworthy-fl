@@ -323,7 +323,7 @@ def train(msg: Message, context: Context):
         global_state
     )
     
-    if aggregation_type == "median" and tee_enabled:
+    if aggregation_type == "median" and tee_enabled and (not zk_verification_enabled or zk_accepted):
         submit_result = submit_update_via_tee_api(
             round_id=server_round,
             client_id=str(partition_id),
@@ -336,6 +336,14 @@ def train(msg: Message, context: Context):
             f"client={partition_id} "
             f"accepted_updates="
             f"{submit_result['accepted_updates']}"
+        )
+
+    elif aggregation_type == "median" and tee_enabled and zk_verification_enabled and not zk_accepted:
+        print(
+            f"[TDX-SKIP] "
+            f"round={server_round} "
+            f"client={partition_id} "
+            f"reason=zk_rejected"
         )
 
     metrics = MetricRecord(
