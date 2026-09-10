@@ -6,6 +6,7 @@ from secure_fl.dataset.adult import get_input_dim, load_client_data
 from secure_fl.model.mlp import AdultMLP
 from secure_fl.model.train import evaluate_model, train_model
 from secure_fl.attack.sign_flip import sign_flip_state_dict
+from secure_fl.tee.client import submit_update_via_tee_api
 
 app = ClientApp()
 
@@ -61,6 +62,14 @@ def train(msg: Message, context: Context):
 
     seed = int(
         context.run_config["seed"]
+    )
+
+    aggregation_type = str(
+        context.run_config["aggregation-type"]
+    )
+
+    tee_enabled = bool(
+        context.run_config["tee-enabled"]
     )
 
     lr = float(
@@ -180,22 +189,56 @@ def train(msg: Message, context: Context):
                 f"{attack_type}"
             )
     
-    arrays = ArrayRecord(local_state)
+    # ==========================================
+    # Direct Client -> TDX submission
+    # ==========================================
+    if aggregation_type == "median" and tee_enabled:
+        server_round = int(
+            msg.content["config"]["server-round"]
+        )
+
+        submit_result = submit_update_via_tee_api(
+            round_id=server_round,
+            client_id=str(partition_id),
+            state=local_state,
+        )
+
+        print(
+            f"[TDX-SUBMIT] "
+            f"round={server_round} "
+            f"client={partition_id} "
+            f"accepted_updates="
+            f"{submit_result['accepted_updates']}"
+        )
+
     metrics = MetricRecord(
         {
             "train_loss": float(loss),
-
-            # 0 = 正常Client
-            # 1 = 悪意Client
-            "is_malicious": int(
-                is_malicious
-            ),
-
-            "num-examples": len(
-                trainloader.dataset
-            ),
+            "is_malicious": int(is_malicious),
+            "num-examples": len(trainloader.dataset),
         }
     )
+
+    # ==========================================
+    # Reply to Flower Server
+    # ==========================================
+    if aggregation_type == "median" and tee_enabled:
+        # Individual local_state has already been sent
+        # directly to the attested TDX VM.
+        #
+        # Do NOT return it to the Flower Server.
+        return Message(
+            content=RecordDict(
+                {
+                    "metrics": metrics,
+                }
+            ),
+            reply_to=msg,
+        )
+
+    # Non-TEE path:
+    # FedAvg / Plain Median keep the original behavior.
+    arrays = ArrayRecord(local_state)
 
     return Message(
         content=RecordDict(
