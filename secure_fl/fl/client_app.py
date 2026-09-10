@@ -4,10 +4,11 @@ from flwr.clientapp import ClientApp
 
 from secure_fl.dataset.adult import get_input_dim, load_client_data
 from secure_fl.model.mlp import AdultMLP
-from secure_fl.model.train import evaluate_model, train_model
+from secure_fl.model.train import evaluate_model, train_model, train_model_with_trace
 from secure_fl.attack.sign_flip import sign_flip_state_dict
 from secure_fl.attack.adaptive_median import adaptive_median_state_dict
 from secure_fl.tee.client import submit_update_via_tee_api
+from secure_fl.zk.risc0_bridge import export_adam_trace, run_risc0_verification
 
 app = ClientApp()
 
@@ -169,15 +170,65 @@ def train(msg: Message, context: Context):
         seed=seed,
     )
 
-    loss = train_model(
-        model=model,
-        trainloader=trainloader,
-        epochs=local_epochs,
-        lr=lr,
-        device=get_device(),
+    # ==========================================
+    # Sampled ZK Verification用 Training Trace
+    # ==========================================
+    zk_verification_enabled = bool(
+        context.run_config["zk-verification-enabled"]
     )
 
+    training_trace = None
+
+    if zk_verification_enabled:
+        loss, training_trace = train_model_with_trace(
+            model=model,
+            trainloader=trainloader,
+            epochs=local_epochs,
+            lr=lr,
+            device=get_device(),
+        )
+
+        print(
+            f"[ZK-TRACE] "
+            f"client={partition_id} "
+            f"round={server_round} "
+            f"steps={len(training_trace)}"
+        )
+
+        trace_path = export_adam_trace(
+            training_trace=training_trace,
+            client_id=partition_id,
+            loss=loss,
+            learning_rate=lr,
+            output_path=(
+                f"zkvm/traces/"
+                f"client_{partition_id}_round_{server_round}.json"
+            ),
+        )
+
+        print(
+            f"[ZK-EXPORT] "
+            f"client={partition_id} "
+            f"round={server_round} "
+            f"path={trace_path}"
+        )
+
+    else:
+        loss = train_model(
+            model=model,
+            trainloader=trainloader,
+            epochs=local_epochs,
+            lr=lr,
+            device=get_device(),
+        )
+
     local_state = model.state_dict()
+
+    zk_result = None
+
+    if zk_verification_enabled:
+        zk_result = run_risc0_verification(trace_path)
+
 
     # ==========================================
     # Model Poisoning
@@ -238,6 +289,32 @@ def train(msg: Message, context: Context):
                 f"Unsupported attack type: "
                 f"{attack_type}"
             )
+
+    
+    zk_accepted = True
+
+    if zk_verification_enabled:
+        submitted_weight = float(
+            local_state["net.0.weight"][0, 0].item()
+        )
+        proved_weight = float(
+            zk_result["proved_final_weight"]
+        )
+
+        zk_error = abs(
+            submitted_weight - proved_weight
+        )
+        zk_accepted = zk_error <= 1e-6
+
+        print(
+            f"[ZK-VERIFY] "
+            f"client={partition_id} "
+            f"round={server_round} "
+            f"submitted={submitted_weight:.10f} "
+            f"proved={proved_weight:.10f} "
+            f"error={zk_error:.12f} "
+            f"result={'ACCEPT' if zk_accepted else 'REJECT'}"
+        )
     
     # ==========================================
     # Direct Client -> TDX submission
@@ -265,6 +342,7 @@ def train(msg: Message, context: Context):
         {
             "train_loss": float(loss),
             "is_malicious": int(is_malicious),
+            "zk_accepted": int(zk_accepted),
             "num-examples": len(trainloader.dataset),
         }
     )

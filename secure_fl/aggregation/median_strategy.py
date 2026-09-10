@@ -52,9 +52,30 @@ class CoordinateWiseMedian(FedAvg):
                 valid_replies[0].content.array_records.keys()
             )[0]
 
+            zk_filtered_replies = []
+
+            for msg in valid_replies:
+                metrics = msg.content.get("metrics")
+
+                if metrics is None:
+                    zk_filtered_replies.append(msg)
+                    continue
+
+                zk_accepted = int(
+                    metrics.get("zk_accepted", 1)
+                )
+
+                if zk_accepted == 1:
+                    zk_filtered_replies.append(msg)
+                else:
+                    print(
+                        f"[ZK-FILTER][round={server_round}] "
+                        f"rejected client update"
+                    )
+
             client_states = [
                 msg.content[record_key].to_torch_state_dict()
-                for msg in valid_replies
+                for msg in zk_filtered_replies
             ]
 
             median_state = coordinate_wise_median_state_dict(

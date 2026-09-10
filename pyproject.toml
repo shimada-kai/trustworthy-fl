@@ -66,3 +66,16 @@ attack-scale = 1.0
 
 # Adaptive Median Attackを開始するround
 attack-start-round = 3
+
+# =============================
+# Sampled ZK Verification
+# =============================
+
+# 1つの選択パラメータについて、
+# local Adam training traceをRISC Zeroで検証するPoC
+zk-verification-enabled = false
+
+# 現在のPoCで監視する座標
+zk-parameter-name = "net.0.weight"
+zk-parameter-row = 0
+zk-parameter-col = 0
