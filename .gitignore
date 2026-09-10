@@ -26,3 +26,8 @@ zkvm/adam_trace.json
 # External ZK experiments
 kaizen_external/
 zkdl_external/
+
+# Demo runtime artifacts
+demo/live_run.log
+demo/*.before_*
+uv.lock
