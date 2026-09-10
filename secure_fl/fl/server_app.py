@@ -187,6 +187,8 @@ def main(grid: Grid, context: Context) -> None:
         f"attack_scale={attack_scale}"
     )
 
+    torch.manual_seed(seed)
+
     model = AdultMLP(get_input_dim(seed))
     initial_arrays = ArrayRecord(model.state_dict())
 
