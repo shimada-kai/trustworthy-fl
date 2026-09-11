@@ -121,7 +121,7 @@ def train(msg: Message, context: Context):
     )
 
     model = AdultMLP(
-    get_input_dim(seed)
+        get_input_dim(seed)
     )
 
     # ==========================================
@@ -225,10 +225,18 @@ def train(msg: Message, context: Context):
     local_state = model.state_dict()
 
     zk_result = None
+    zk_proving_time_ms = 0
+    zk_verification_time_ms = 0
 
     if zk_verification_enabled:
         zk_result = run_risc0_verification(trace_path)
 
+        zk_proving_time_ms = int(
+            zk_result["proving_time_ms"]
+        )
+        zk_verification_time_ms = int(
+            zk_result["verification_time_ms"]
+        )
 
     # ==========================================
     # Model Poisoning
@@ -290,8 +298,15 @@ def train(msg: Message, context: Context):
                 f"{attack_type}"
             )
 
-    
+
+    # Compare the model that would actually be submitted with the
+    # sampled parameter value committed by the RISC Zero proof.
+    #
+    # Post-training poisoning such as Sign Flip changes submitted_weight,
+    # so it is rejected when it no longer matches proved_weight.
     zk_accepted = True
+    tdx_attestation_time_ms = 0.0
+    tdx_submit_time_ms = 0.0
 
     if zk_verification_enabled:
         submitted_weight = float(
@@ -315,19 +330,30 @@ def train(msg: Message, context: Context):
             f"error={zk_error:.12f} "
             f"result={'ACCEPT' if zk_accepted else 'REJECT'}"
         )
-    
+
     # ==========================================
     # Direct Client -> TDX submission
     # ==========================================
     context.state["previous-global"] = ArrayRecord(
         global_state
     )
-    
-    if aggregation_type == "median" and tee_enabled and (not zk_verification_enabled or zk_accepted):
+
+    if (
+        aggregation_type == "median"
+        and tee_enabled
+        and (not zk_verification_enabled or zk_accepted)
+    ):
         submit_result = submit_update_via_tee_api(
             round_id=server_round,
             client_id=str(partition_id),
             state=local_state,
+        )
+
+        tdx_attestation_time_ms = float(
+            submit_result["attestation_time_ms"]
+        )
+        tdx_submit_time_ms = float(
+            submit_result["submit_time_ms"]
         )
 
         print(
@@ -335,10 +361,19 @@ def train(msg: Message, context: Context):
             f"round={server_round} "
             f"client={partition_id} "
             f"accepted_updates="
-            f"{submit_result['accepted_updates']}"
+            f"{submit_result['accepted_updates']} "
+            f"attestation_ms="
+            f"{tdx_attestation_time_ms:.2f} "
+            f"submit_ms="
+            f"{tdx_submit_time_ms:.2f}"
         )
 
-    elif aggregation_type == "median" and tee_enabled and zk_verification_enabled and not zk_accepted:
+    elif (
+        aggregation_type == "median"
+        and tee_enabled
+        and zk_verification_enabled
+        and not zk_accepted
+    ):
         print(
             f"[TDX-SKIP] "
             f"round={server_round} "
@@ -351,6 +386,10 @@ def train(msg: Message, context: Context):
             "train_loss": float(loss),
             "is_malicious": int(is_malicious),
             "zk_accepted": int(zk_accepted),
+            "zk_proving_time_ms": zk_proving_time_ms,
+            "zk_verification_time_ms": zk_verification_time_ms,
+            "tdx_attestation_time_ms": tdx_attestation_time_ms,
+            "tdx_submit_time_ms": tdx_submit_time_ms,
             "num-examples": len(trainloader.dataset),
         }
     )

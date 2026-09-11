@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "secure-fl-starter"
-version = "0.1.0"
-description = "Flower + PyTorch federated learning baseline on the UCI Adult dataset"
+name = "trustworthy-fl"
+version = "1.0.0"
+description = "Trustworthy federated learning with robust aggregation, RISC Zero verification, and Intel TDX"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "flwr[simulation]>=1.30,<2.0",
@@ -34,28 +34,29 @@ local-epochs = 1
 batch-size = 256
 learning-rate = 0.001
 seed = 42
-tee-enabled = false
 
 # =============================
-# Aggregation設定
+# Aggregation
 # =============================
 
 # "fedavg" または "median"
 aggregation-type = "median"
 
+# Intel TDX上でMedian集約を実行する場合のみtrue
+tee-enabled = false
+
 # =============================
-# Model Poisoning設定
+# Model Poisoning
 # =============================
 
-# falseなら通常FedAvg
-# trueなら攻撃を有効化
+# trueで攻撃を有効化
 attack-enabled = false
 
 # 使用する攻撃手法
 attack-type = "sign_flip"
 
-# 7クライアントのうち、
-# Client 0, 1, 2を攻撃者にする
+# デフォルトは7クライアント中3クライアントを攻撃者に設定
+# 4/7攻撃実験では実行時に "0,1,2,3" を指定する
 malicious-client-ids = "0,1,2"
 
 # 1.0:

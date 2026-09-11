@@ -85,9 +85,14 @@ def train_model_with_trace(
     device: torch.device,
 ):
     """
-    ZK検証PoC用。
-    既存 train_model() は変更せず、
-    net.0.weight[0, 0] のAdam更新軌跡を記録する。
+    Sampled ZK Verification PoC用のtraining traceを記録する。
+
+    既存のtrain_model()は変更せず、
+    net.0.weight[0, 0]のAdam更新軌跡を各optimizer stepで記録する。
+
+    現在のPoCではgradientをRISC Zeroへの入力として使用するため、
+    forward/backwardからgradientが生成された過程そのものは
+    ZK proofの対象外である。
     """
     model.to(device)
     model.train()

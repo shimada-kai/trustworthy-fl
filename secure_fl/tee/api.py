@@ -1,7 +1,8 @@
 import base64
-import tempfile
 import hashlib
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +25,8 @@ TDX_ATTEST_BIN = Path("/usr/local/sbin/tdx-attest")
 # Flower Server must never receive these individual updates.
 #
 # zkVM integration:
-# For now, an update reaching this storage is treated as accepted.
-# Later, only updates that pass zkVM verification will be stored here.
+# Client-side ZK verification acts as the admission gate.
+# Updates rejected by the ZK check are not submitted to this storage.
 #
 # {
 #     round_id: {
@@ -168,9 +169,15 @@ def aggregate_round(
             ),
         )
 
+    aggregation_started = time.perf_counter()
+
     aggregated_state = aggregate_in_tee(
         list(round_updates.values())
     )
+
+    aggregation_time_ms = (
+        time.perf_counter() - aggregation_started
+    ) * 1000.0
 
     accepted_clients = len(round_updates)
 
@@ -180,6 +187,7 @@ def aggregate_round(
     return {
         "round_id": request.round_id,
         "accepted_clients": accepted_clients,
+        "aggregation_time_ms": aggregation_time_ms,
         "aggregated_state": aggregated_state,
     }
 

@@ -286,3 +286,40 @@ def test_submit_update_is_not_called_when_attestation_fails(monkeypatch):
         )
 
     assert submit_called is False
+
+def test_get_aggregated_update_returns_metrics(monkeypatch):
+    from secure_fl.tee.client import get_aggregated_update_via_tee_api
+
+    class AggregateRoundResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "round_id": 1,
+                "accepted_clients": 3,
+                "aggregation_time_ms": 12.5,
+                "aggregated_state": {
+                    "weight": [2.0, 3.0],
+                },
+            }
+
+    def mock_post(url, *args, **kwargs):
+        assert url.endswith("/aggregate_round")
+        return AggregateRoundResponse()
+
+    monkeypatch.setattr(
+        "secure_fl.tee.client.requests.post",
+        mock_post,
+    )
+
+    state, accepted_clients, aggregation_time_ms = (
+        get_aggregated_update_via_tee_api(round_id=1)
+    )
+
+    assert torch.equal(
+        state["weight"],
+        torch.tensor([2.0, 3.0]),
+    )
+    assert accepted_clients == 3
+    assert aggregation_time_ms == 12.5

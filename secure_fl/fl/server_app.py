@@ -1,17 +1,146 @@
 from pathlib import Path
 
 import torch
-from flwr.app import ArrayRecord, ConfigRecord, Context
+from flwr.app import (
+    ArrayRecord,
+    ConfigRecord,
+    Context,
+    MetricRecord,
+    RecordDict,
+)
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedAvg
 from secure_fl.aggregation.median_strategy import CoordinateWiseMedian
-
+from secure_fl.config import NUM_CLIENTS
 from secure_fl.dataset.adult import get_input_dim, load_global_test_data
-from secure_fl.evaluation.results import save_result
+from secure_fl.evaluation.results import load_result, save_result
 from secure_fl.model.mlp import AdultMLP
 from secure_fl.model.train import evaluate_model
 
 app = ServerApp()
+
+
+def aggregate_train_metrics(
+    records: list[RecordDict],
+    weighting_metric_name: str,
+) -> MetricRecord:
+    """Aggregate training, security, and system-overhead metrics."""
+
+    if not records:
+        raise ValueError("records must contain at least one client result")
+
+    client_metrics = [
+        next(iter(record.metric_records.values()))
+        for record in records
+    ]
+
+    weights = [
+        float(metrics[weighting_metric_name])
+        for metrics in client_metrics
+    ]
+    total_weight = sum(weights)
+
+    if total_weight <= 0:
+        raise ValueError("total client weight must be positive")
+
+    train_loss = sum(
+        float(metrics["train_loss"]) * weight
+        for metrics, weight in zip(
+            client_metrics,
+            weights,
+            strict=True,
+        )
+    ) / total_weight
+
+    accepted_clients = sum(
+        int(metrics.get("zk_accepted", 1))
+        for metrics in client_metrics
+    )
+    rejected_clients = len(client_metrics) - accepted_clients
+
+    malicious_clients = sum(
+        int(metrics.get("is_malicious", 0))
+        for metrics in client_metrics
+    )
+    honest_clients = len(client_metrics) - malicious_clients
+
+    rejected_malicious_clients = sum(
+        int(
+            int(metrics.get("is_malicious", 0)) == 1
+            and int(metrics.get("zk_accepted", 1)) == 0
+        )
+        for metrics in client_metrics
+    )
+
+    false_rejected_honest_clients = sum(
+        int(
+            int(metrics.get("is_malicious", 0)) == 0
+            and int(metrics.get("zk_accepted", 1)) == 0
+        )
+        for metrics in client_metrics
+    )
+
+    def positive_values(key: str) -> list[float]:
+        return [
+            float(metrics.get(key, 0.0))
+            for metrics in client_metrics
+            if float(metrics.get(key, 0.0)) > 0.0
+        ]
+
+    def mean_or_zero(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    zk_proving_times = positive_values(
+        "zk_proving_time_ms"
+    )
+    zk_verification_times = positive_values(
+        "zk_verification_time_ms"
+    )
+    tdx_attestation_times = positive_values(
+        "tdx_attestation_time_ms"
+    )
+    tdx_submit_times = positive_values(
+        "tdx_submit_time_ms"
+    )
+
+    return MetricRecord(
+        {
+            "train_loss": train_loss,
+            "zk_accepted_clients": accepted_clients,
+            "zk_rejected_clients": rejected_clients,
+            "malicious_clients": malicious_clients,
+            "rejected_malicious_clients": (
+                rejected_malicious_clients
+            ),
+            "attack_detection_rate": (
+                rejected_malicious_clients / malicious_clients
+                if malicious_clients
+                else 0.0
+            ),
+            "false_reject_rate": (
+                false_rejected_honest_clients / honest_clients
+                if honest_clients
+                else 0.0
+            ),
+            "zk_proving_time_ms_mean": mean_or_zero(
+                zk_proving_times
+            ),
+            "zk_proving_time_ms_max": (
+                max(zk_proving_times)
+                if zk_proving_times
+                else 0.0
+            ),
+            "zk_verification_time_ms_mean": mean_or_zero(
+                zk_verification_times
+            ),
+            "tdx_attestation_time_ms_mean": mean_or_zero(
+                tdx_attestation_times
+            ),
+            "tdx_submit_time_ms_mean": mean_or_zero(
+                tdx_submit_times
+            ),
+        }
+    )
 
 
 def make_global_evaluate(
@@ -25,7 +154,7 @@ def make_global_evaluate(
     attack_scale: float,
     malicious_client_ids: str,
 ):
-    
+
     history = []
 
     def global_evaluate(server_round: int, arrays: ArrayRecord):
@@ -52,7 +181,7 @@ def make_global_evaluate(
                 "label": experiment_label,
                 "family": "federated",
 
-                "num_clients": 7,
+                "num_clients": NUM_CLIENTS,
                 "num_rounds": num_rounds,
                 "learning_rate": lr,
                 "seed": seed,
@@ -123,11 +252,15 @@ def main(grid: Grid, context: Context) -> None:
     tee_enabled = bool(
         context.run_config["tee-enabled"]
     )
+
+    zk_verification_enabled = bool(
+        context.run_config["zk-verification-enabled"]
+    )
     # ==========================================
     # 攻撃設定
     # ==========================================
     attack_enabled = bool(
-    context.run_config["attack-enabled"]
+        context.run_config["attack-enabled"]
     )
 
     attack_type = str(
@@ -143,29 +276,70 @@ def main(grid: Grid, context: Context) -> None:
             "malicious-client-ids"
         ]
     )
+    malicious_count = len(
+        [
+            client_id
+            for client_id in malicious_client_ids.split(",")
+            if client_id.strip()
+        ]
+    )
+
+    attack_label = attack_type.replace("_", " ").title()
+
     # ==========================================
     # 攻撃あり/なしで実験名を分ける
     # ==========================================
     if aggregation_type == "median":
         if tee_enabled:
             if attack_enabled:
-                experiment_name = "tdx_median_poisoning"
-                experiment_label = "TDX Median + Sign Flip (3/7)"
+                if zk_verification_enabled:
+                    experiment_name = "zk_tdx_median_poisoning"
+                    experiment_label = (
+                        f"ZK + TDX Median + {attack_label} "
+                        f"({malicious_count}/{NUM_CLIENTS})"
+                    )
+                else:
+                    experiment_name = "tdx_median_poisoning"
+                    experiment_label = (
+                        f"TDX Median + {attack_label} "
+                        f"({malicious_count}/{NUM_CLIENTS})"
+                    )
             else:
-                experiment_name = "tdx_median"
-                experiment_label = "TDX Median"
+                if zk_verification_enabled:
+                    experiment_name = "zk_tdx_median"
+                    experiment_label = "ZK + TDX Median"
+                else:
+                    experiment_name = "tdx_median"
+                    experiment_label = "TDX Median"
         else:
             if attack_enabled:
-                experiment_name = "median_poisoning"
-                experiment_label = "Median + Sign Flip (3/7)"
+                if zk_verification_enabled:
+                    experiment_name = "zk_median_poisoning"
+                    experiment_label = (
+                        f"ZK + Median + {attack_label} "
+                        f"({malicious_count}/{NUM_CLIENTS})"
+                    )
+                else:
+                    experiment_name = f"median_poisoning_{malicious_count}of{NUM_CLIENTS}"
+                    experiment_label = (
+                        f"Median + {attack_label} "
+                        f"({malicious_count}/{NUM_CLIENTS})"
+                    )
             else:
-                experiment_name = "median"
-                experiment_label = "Median"
+                if zk_verification_enabled:
+                    experiment_name = "zk_median"
+                    experiment_label = "ZK + Median"
+                else:
+                    experiment_name = "median"
+                    experiment_label = "Median"
 
     elif aggregation_type == "fedavg":
         if attack_enabled:
             experiment_name = "fedavg_poisoning"
-            experiment_label = "FedAvg + Sign Flip (3/7)"
+            experiment_label = (
+                f"FedAvg + {attack_label} "
+                f"({malicious_count}/{NUM_CLIENTS})"
+            )
         else:
             experiment_name = "fedavg"
             experiment_label = "FedAvg"
@@ -195,9 +369,10 @@ def main(grid: Grid, context: Context) -> None:
     strategy_kwargs = {
         "fraction_train": 1.0,
         "fraction_evaluate": 1.0,
-        "min_train_nodes": 7,
-        "min_evaluate_nodes": 7,
-        "min_available_nodes": 7,
+        "min_train_nodes": NUM_CLIENTS,
+        "min_evaluate_nodes": NUM_CLIENTS,
+        "min_available_nodes": NUM_CLIENTS,
+        "train_metrics_aggr_fn": aggregate_train_metrics,
     }
 
     if aggregation_type == "median":
@@ -241,6 +416,49 @@ def main(grid: Grid, context: Context) -> None:
             malicious_client_ids=malicious_client_ids,
         ),
     )
+
+    # ==========================================
+    # Save aggregated training/security metrics
+    # ==========================================
+    result_path = Path(
+        f"artifacts/results/{experiment_name}.json"
+    )
+
+    if result_path.exists():
+        payload = load_result(result_path)
+
+        train_metrics_history = [
+            {
+                "round": int(round_id),
+                **{
+                    key: (
+                        int(value)
+                        if isinstance(value, int)
+                        else float(value)
+                    )
+                    for key, value in metrics.items()
+                },
+            }
+            for round_id, metrics
+            in sorted(
+                result.train_metrics_clientapp.items()
+            )
+        ]
+
+        payload["train_metrics_history"] = (
+            train_metrics_history
+        )
+
+        payload["final_train_metrics"] = (
+            train_metrics_history[-1]
+            if train_metrics_history
+            else {}
+        )
+
+        save_result(
+            experiment_name,
+            payload,
+        )
 
     Path("artifacts/models").mkdir(
     parents=True,
