@@ -33,15 +33,18 @@ class CoordinateWiseMedian(FedAvg):
         # TDX Median
         # ==========================================
         if self.tee_enabled:
-            median_state, accepted_clients = (
-                get_aggregated_update_via_tee_api(
-                    round_id=server_round,
-                )
+            (
+                median_state,
+                accepted_clients,
+                aggregation_time_ms,
+            ) = get_aggregated_update_via_tee_api(
+                round_id=server_round,
             )
 
             print(
                 f"[TDX-MEDIAN][round={server_round}] "
-                f"aggregated {accepted_clients} accepted updates"
+                f"aggregated {accepted_clients} accepted updates "
+                f"aggregation_ms={aggregation_time_ms:.2f}"
             )
 
         # ==========================================
@@ -78,6 +81,12 @@ class CoordinateWiseMedian(FedAvg):
                 for msg in zk_filtered_replies
             ]
 
+            if not client_states:
+                raise RuntimeError(
+                    f"No client updates accepted in round "
+                    f"{server_round}; aggregation cannot continue"
+                )
+
             median_state = coordinate_wise_median_state_dict(
                 client_states
             )
@@ -98,5 +107,13 @@ class CoordinateWiseMedian(FedAvg):
             reply_contents,
             self.weighted_by_key,
         )
+
+        if self.tee_enabled:
+            metrics["tdx_aggregation_time_ms"] = float(
+                aggregation_time_ms
+            )
+            metrics["tdx_accepted_clients"] = int(
+                accepted_clients
+            )
 
         return aggregated_arrays, metrics

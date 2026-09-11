@@ -1,6 +1,7 @@
 """Bridge between Flower training traces and RISC Zero."""
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,7 @@ def export_adam_trace(
     learning_rate: float,
     output_path: str | Path,
 ) -> Path:
-    """Export a sampled Adam training trace for the RISC Zero host."""
+    """Export the sampled net.0.weight[0,0] Adam trace for RISC Zero."""
 
     if not training_trace:
         raise ValueError("training_trace must not be empty")
@@ -42,8 +43,6 @@ def export_adam_trace(
     )
 
     return path
-
-import subprocess
 
 
 def run_risc0_verification(

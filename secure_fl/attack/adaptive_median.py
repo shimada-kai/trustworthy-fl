@@ -12,7 +12,7 @@ def adaptive_median_state_dict(
     """
     Coordinate-wise Medianの順位統計量を狙うAdaptive Attack。
 
-    7 clients中3 clientsが同じ規則を独立に実行することを想定する。
+    複数のmalicious clientsが同じ規則を独立に実行することを想定する。
 
     公開Global Modelの移動量
 

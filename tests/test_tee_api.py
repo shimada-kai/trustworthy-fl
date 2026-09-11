@@ -56,6 +56,7 @@ def test_submit_update_and_aggregate_round():
     assert result["round_id"] == 1
     assert result["accepted_clients"] == 2
     assert result["aggregated_state"]["weight"] == [3.0, 5.0]
+    assert result["aggregation_time_ms"] >= 0.0
 
     # Individual client updates must be removed after aggregation.
     assert 1 not in verified_updates

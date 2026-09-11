@@ -387,21 +387,21 @@ def main() -> None:
     6. comparison.csvとして保存する
     7. Accuracy / ROC-AUC / PR-AUCのグラフを保存する
 
-    将来的に以下のような実験結果を自動比較できる。
+    現在の実験結果を以下の流れで比較できる。
 
     Centralized
         ↓
     FedAvg
         ↓
-    FedAvg + Poisoning
+    FedAvg + Sign Flip
         ↓
-    Plain Median + Poisoning
+    Coordinate-wise Median
         ↓
-    MPC Median + Poisoning
+    Median + Sign Flip
         ↓
-    MPC + ZK
+    ZK + Median + Sign Flip
         ↓
-    MPC + ZK + DP
+    ZK + TDX Median + Sign Flip
     """
 
     # =========================================================

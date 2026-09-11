@@ -3,6 +3,7 @@ import hashlib
 import os
 import subprocess
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -199,12 +200,18 @@ def submit_update_via_tee_api(
 
     # Security gate:
     # no individual model update is sent before attestation succeeds.
+    attestation_started = time.perf_counter()
+
     _verify_remote_attestation(
         api_url=api_url,
         ca_cert=ca_cert,
         instance=instance,
         verifier_bin=verifier_bin,
     )
+
+    attestation_time_ms = (
+        time.perf_counter() - attestation_started
+    ) * 1000.0
 
     payload = {
         "round_id": round_id,
@@ -215,6 +222,8 @@ def submit_update_via_tee_api(
         },
     }
 
+    submit_started = time.perf_counter()
+
     response = requests.post(
         f"{api_url}/submit_update",
         json=payload,
@@ -223,6 +232,10 @@ def submit_update_via_tee_api(
     )
     response.raise_for_status()
 
+    submit_time_ms = (
+        time.perf_counter() - submit_started
+    ) * 1000.0
+
     print(
         f"[TLS-SUBMIT] "
         f"round={round_id} "
@@ -230,14 +243,19 @@ def submit_update_via_tee_api(
         f"result=SUCCESS"
     )
 
-    return response.json()
+    result = response.json()
+    result["attestation_time_ms"] = attestation_time_ms
+    result["submit_time_ms"] = submit_time_ms
+
+    return result
+
 
 def get_aggregated_update_via_tee_api(
     round_id: int,
     api_url: str = "https://34.146.228.189:8000",
     ca_cert: str = "certs/server.crt",
-) -> tuple[dict[str, torch.Tensor], int]:
-    """Fetch only the aggregated model for one round from the TDX VM."""
+) -> tuple[dict[str, torch.Tensor], int, float]:
+    """Fetch the aggregated model and aggregation metadata for one round."""
 
     response = requests.post(
         f"{api_url}/aggregate_round",
@@ -254,4 +272,8 @@ def get_aggregated_update_via_tee_api(
         for name, value in result["aggregated_state"].items()
     }
 
-    return aggregated_state, int(result["accepted_clients"])
+    return (
+        aggregated_state,
+        int(result["accepted_clients"]),
+        float(result["aggregation_time_ms"]),
+    )
